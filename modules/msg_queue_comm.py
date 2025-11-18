@@ -1,18 +1,17 @@
-# modules/msg_queue_comm.py
 from multiprocessing import Process, Queue
 from .secure_utils import SecureChannel
 
 def _sender_queue(queue: Queue, key: bytes, log_q: Queue):
     sc = SecureChannel(key)
-    messages = ["Secure Msg A", "Secure Msg B"]
+    messages = ["Secure Data 1", "Secure Data 2", "Secure Data 3"]
     for m in messages:
         enc = sc.encrypt(m)
-        log_q.put(("send_plain", m))
-        log_q.put(("send_enc", enc))
+        log_q.put(f"[Sender] Plain -> {m}")
+        log_q.put(f"[Sender] Encrypted -> {enc}")
         queue.put(enc)
-        log_q.put(("queued", None))
+    # signal receiver to stop
     queue.put(None)
-    log_q.put(("sender_done", None))
+    log_q.put("[Sender] All messages queued")
 
 def _receiver_queue(queue: Queue, key: bytes, log_q: Queue):
     sc = SecureChannel(key)
@@ -20,12 +19,15 @@ def _receiver_queue(queue: Queue, key: bytes, log_q: Queue):
         item = queue.get()
         if item is None:
             break
-        log_q.put(("recv_enc", item))
+        log_q.put(f"[Receiver] Received encrypted -> {item}")
         dec = sc.decrypt(item)
-        log_q.put(("recv_dec", dec))
-    log_q.put(("receiver_done", None))
+        log_q.put(f"[Receiver] Decrypted -> {dec}")
+    log_q.put("[Receiver] Done")
 
 def secure_message_queue_example():
+    """
+    Runs a secure message-queue demo and returns logs as string.
+    """
     queue = Queue()
     log_q = Queue()
     sc = SecureChannel()
@@ -36,31 +38,17 @@ def secure_message_queue_example():
 
     p_sender.start()
     p_receiver.start()
+
     p_sender.join()
     p_receiver.join()
 
-    events = []
+    logs = []
     while not log_q.empty():
         try:
-            events.append(log_q.get_nowait())
+            logs.append(log_q.get_nowait())
         except:
             break
 
-    lines = ["--- Secure Message Queue Communication ---"]
-    for ev, payload in events:
-        if ev == "send_plain":
-            lines.append(f"[Sender] Plain -> {payload}")
-        elif ev == "send_enc":
-            lines.append(f"[Sender] Encrypted -> {payload}")
-        elif ev == "queued":
-            lines.append("[Sender] Queued message")
-        elif ev == "recv_enc":
-            lines.append(f"[Receiver] Received Encrypted -> {payload}")
-        elif ev == "recv_dec":
-            lines.append(f"[Receiver] Decrypted -> {payload}")
-        elif ev == "sender_done":
-            lines.append("[Sender] Done")
-        elif ev == "receiver_done":
-            lines.append("[Receiver] Done")
-    lines.append("--- Secure Message Queue Done ---")
-    return "\n".join(lines), events
+    header = "--- Secure Message Queue Communication ---"
+    footer = "--- Secure Message Queue Done ---"
+    return "\n".join([header] + logs + [footer])
