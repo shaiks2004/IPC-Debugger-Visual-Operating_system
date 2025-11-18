@@ -1,31 +1,28 @@
+# modules/shared_memory_comm.py
 from multiprocessing import Process, Manager, Queue
 from .secure_utils import SecureChannel
 
 def _writer_shared(shared_dict, key: bytes, log_q: Queue):
     sc = SecureChannel(key)
-    msg = "Shared Secure Data (sensitive)"
+    msg = "Shared Secure Data"
     enc = sc.encrypt(msg)
-    # store as bytes represented in base64-ish str by simply decoding to latin1 safe text
-    # safer approach for cross-process: keep bytes in manager list
-    shared_dict['data'] = enc  # manager will proxy the bytes
-    log_q.put(f"[Writer] Wrote encrypted to shared memory -> {enc}")
-    log_q.put("[Writer] Done")
+    # store bytes in manager by assigning directly (Manager proxies bytes)
+    shared_dict['data'] = enc
+    log_q.put(("writer_written", enc))
+    log_q.put(("writer_done", None))
 
 def _reader_shared(shared_dict, key: bytes, log_q: Queue):
     sc = SecureChannel(key)
     enc = shared_dict.get('data', None)
     if enc is None:
-        log_q.put("[Reader] No data in shared memory")
+        log_q.put(("reader_no_data", None))
     else:
-        log_q.put(f"[Reader] Read encrypted from shared memory -> {enc}")
+        log_q.put(("reader_read", enc))
         dec = sc.decrypt(enc)
-        log_q.put(f"[Reader] Decrypted -> {dec}")
-    log_q.put("[Reader] Done")
+        log_q.put(("reader_dec", dec))
+    log_q.put(("reader_done", None))
 
 def secure_shared_memory_example():
-    """
-    Uses a Manager dict to simulate shared memory; returns logs string.
-    """
     manager = Manager()
     shared_dict = manager.dict()
     log_q = Queue()
@@ -37,17 +34,29 @@ def secure_shared_memory_example():
 
     p_writer.start()
     p_writer.join()
-
     p_reader.start()
     p_reader.join()
 
-    logs = []
+    events = []
     while not log_q.empty():
         try:
-            logs.append(log_q.get_nowait())
+            events.append(log_q.get_nowait())
         except:
             break
 
-    header = "--- Secure Shared Memory Communication ---"
-    footer = "--- Secure Shared Memory Done ---"
-    return "\n".join([header] + logs + [footer])
+    lines = ["--- Secure Shared Memory Communication ---"]
+    for ev, payload in events:
+        if ev == "writer_written":
+            lines.append(f"[Writer] Wrote Encrypted -> {payload}")
+        elif ev == "writer_done":
+            lines.append("[Writer] Done")
+        elif ev == "reader_read":
+            lines.append(f"[Reader] Read Encrypted -> {payload}")
+        elif ev == "reader_dec":
+            lines.append(f"[Reader] Decrypted -> {payload}")
+        elif ev == "reader_no_data":
+            lines.append("[Reader] No data found")
+        elif ev == "reader_done":
+            lines.append("[Reader] Done")
+    lines.append("--- Secure Shared Memory Done ---")
+    return "\n".join(lines), events
