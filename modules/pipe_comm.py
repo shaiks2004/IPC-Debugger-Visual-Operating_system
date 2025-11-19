@@ -1,70 +1,53 @@
-# modules/pipe_comm.py
 from multiprocessing import Process, Pipe, Queue
 from .secure_utils import SecureChannel
+from cryptography.fernet import Fernet
 
 def _sender_pipe(conn, key: bytes, log_q: Queue):
     sc = SecureChannel(key)
-    data = "Hello via Secure Pipe"
+    data = "Hello Securely through Pipe"
     enc = sc.encrypt(data)
-    log_q.put(("send_plain", data))
-    log_q.put(("send_enc", enc))
+    log_q.put(f"[Sender] Plain -> {data}")
+    log_q.put(f"[Sender] Encrypted (bytes) -> {enc}")
     conn.send(enc)
     conn.close()
-    log_q.put(("sent", None))
+    log_q.put("[Sender] Sent encrypted data via pipe")
 
 def _receiver_pipe(conn, key: bytes, log_q: Queue):
     sc = SecureChannel(key)
     enc = conn.recv()
-    log_q.put(("recv_enc", enc))
+    log_q.put(f"[Receiver] Received encrypted (bytes) -> {enc}")
     dec = sc.decrypt(enc)
-    log_q.put(("recv_dec", dec))
+    log_q.put(f"[Receiver] Decrypted -> {dec}")
     conn.close()
-    log_q.put(("recv_done", None))
+    log_q.put("[Receiver] Done")
 
 def secure_pipe_example():
     """
-    Runs secure pipe demo and returns logs (string) AND list of events for animation.
-    We'll collect events via a Queue and then return them as text.
+    Runs a secure pipe demo and returns the aggregated logs as a string.
     """
     parent_conn, child_conn = Pipe()
     log_q = Queue()
 
-    sc = SecureChannel()
+    sc = SecureChannel()  # generate key once
     key = sc.key
 
-    p1 = Process(target=_sender_pipe, args=(parent_conn, key, log_q))
-    p2 = Process(target=_receiver_pipe, args=(child_conn, key, log_q))
+    p_sender = Process(target=_sender_pipe, args=(parent_conn, key, log_q))
+    p_receiver = Process(target=_receiver_pipe, args=(child_conn, key, log_q))
 
-    p1.start()
-    p2.start()
+    p_sender.start()
+    p_receiver.start()
 
-    p1.join()
-    p2.join()
+    p_sender.join()
+    p_receiver.join()
 
-    # Collect all events
-    events = []
+    # Collect logs
+    logs = []
     while not log_q.empty():
         try:
-            events.append(log_q.get_nowait())
+            logs.append(log_q.get_nowait())
         except:
             break
 
-    # Build readable logs
-    lines = ["--- Secure Pipe Communication ---"]
-    for ev, payload in events:
-        if ev == "send_plain":
-            lines.append(f"[Sender] Plain -> {payload}")
-        elif ev == "send_enc":
-            lines.append(f"[Sender] Encrypted -> {payload}")
-        elif ev == "sent":
-            lines.append("[Sender] Sent via pipe")
-        elif ev == "recv_enc":
-            lines.append(f"[Receiver] Received Encrypted -> {payload}")
-        elif ev == "recv_dec":
-            lines.append(f"[Receiver] Decrypted -> {payload}")
-        elif ev == "recv_done":
-            lines.append("[Receiver] Done")
-    lines.append("--- Secure Pipe Done ---")
-    # return logs and events (events useful for animation)
-    return "\n".join(lines), events
-
+    header = "--- Secure Pipe Communication ---"
+    footer = "--- Secure Pipe Done ---"
+    return "\n".join([header] + logs + [footer])
