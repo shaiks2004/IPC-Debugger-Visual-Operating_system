@@ -13,6 +13,3 @@ def process_info(name="Demo Process"):
     time.sleep(0.1)
     logs.append("[Process] State -> TERMINATED")
     return "\n".join(logs)
-
-
-
