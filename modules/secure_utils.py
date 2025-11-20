@@ -1,3 +1,4 @@
+# modules/secure_utils.py
 from cryptography.fernet import Fernet
 
 class SecureChannel:
