@@ -1,15 +1,15 @@
+#timing for process how the sate is goging to ehel
 import os
 import time
 
 def process_info(name="Demo Process"):
     logs = []
-    logs.append(f"[Process: {name}] PID: {os.getpid()}")
-    # Simulate some state changes
-    logs.append(f"[Process: {name}] State -> NEW")
-    time.sleep(0.3)
-    logs.append(f"[Process: {name}] State -> READY")
-    time.sleep(0.3)
-    logs.append(f"[Process: {name}] State -> RUNNING")
-    time.sleep(0.3)
-    logs.append(f"[Process: {name}] State -> TERMINATED")
+    logs.append(f"Process: {name} | PID: {os.getpid()}")
+    logs.append("State: NEW")
+    time.sleep(0.08)
+    logs.append("State: READY")
+    time.sleep(0.08)
+    logs.append("State: RUNNING")
+    time.sleep(0.08)
+    logs.append("State: TERMINATED")
     return "\n".join(logs)

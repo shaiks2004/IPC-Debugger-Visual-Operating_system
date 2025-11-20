@@ -1,53 +1,83 @@
+
+# Simple secure pipe demo where sender sends (ciphertext, hmac)
+#here the code wil start commucnaing in ppoes
+
 from multiprocessing import Process, Pipe, Queue
-from .secure_utils import SecureChannel
-from cryptography.fernet import Fernet
+from .secure_utils import SecureChannel, compute_hmac, verify_hmac
 
 def _sender_pipe(conn, key: bytes, log_q: Queue):
+    # note: small, intentionally straightforward sender
     sc = SecureChannel(key)
-    data = "Hello Securely through Pipe"
-    enc = sc.encrypt(data)
-    log_q.put(f"[Sender] Plain -> {data}")
-    log_q.put(f"[Sender] Encrypted (bytes) -> {enc}")
-    conn.send(enc)
+    plain = "Hello Securely through Pipe"
+    enc = sc.encrypt(plain)
+    tag = compute_hmac(key, enc)
+    # send ciphertext + tag together
+    conn.send((enc, tag))
+    log_q.put(("sender_plain", plain))
+    log_q.put(("sender_enc", repr(enc)))
+    log_q.put(("sender_hmac", repr(tag)))
     conn.close()
-    log_q.put("[Sender] Sent encrypted data via pipe")
+    log_q.put(("sender_done", None))
 
 def _receiver_pipe(conn, key: bytes, log_q: Queue):
     sc = SecureChannel(key)
-    enc = conn.recv()
-    log_q.put(f"[Receiver] Received encrypted (bytes) -> {enc}")
-    dec = sc.decrypt(enc)
-    log_q.put(f"[Receiver] Decrypted -> {dec}")
-    conn.close()
-    log_q.put("[Receiver] Done")
+    try:
+        item = conn.recv()
+    except EOFError:
+        log_q.put(("receiver_error", "no data"))
+        conn.close()
+        return
 
-def secure_pipe_example():
+    if not item or not isinstance(item, tuple) or len(item) != 2:
+        log_q.put(("receiver_invalid_format", repr(item)))
+        conn.close()
+        return
+
+    enc, tag = item
+    log_q.put(("receiver_received_enc", repr(enc)))
+    ok = verify_hmac(key, enc, tag)
+    log_q.put(("receiver_hmac_ok", str(ok)))
+    if not ok:
+        log_q.put(("receiver_auth_failed", None))
+        conn.close()
+        return
+
+    try:
+        dec = sc.decrypt(enc)
+        log_q.put(("receiver_decrypted", dec))
+    except Exception as e:
+        log_q.put(("receiver_decrypt_error", str(e)))
+    conn.close()
+    log_q.put(("receiver_done", None))
+
+def secure_pipe_example(key: bytes = None):
     """
-    Runs a secure pipe demo and returns the aggregated logs as a string.
+    Run demo and return (log_text, events_list).
+    events_list currently empty but kept for animation compatibility.
     """
     parent_conn, child_conn = Pipe()
     log_q = Queue()
 
-    sc = SecureChannel()  # generate key once
-    key = sc.key
+    sc = SecureChannel(key)
+    key_used = sc.key
 
-    p_sender = Process(target=_sender_pipe, args=(parent_conn, key, log_q))
-    p_receiver = Process(target=_receiver_pipe, args=(child_conn, key, log_q))
+    p1 = Process(target=_sender_pipe, args=(parent_conn, key_used, log_q))
+    p2 = Process(target=_receiver_pipe, args=(child_conn, key_used, log_q))
 
-    p_sender.start()
-    p_receiver.start()
+    p1.start()
+    p2.start()
 
-    p_sender.join()
-    p_receiver.join()
+    p1.join()
+    p2.join()
 
-    # Collect logs
     logs = []
     while not log_q.empty():
         try:
-            logs.append(log_q.get_nowait())
-        except:
+            ev = log_q.get_nowait()
+            logs.append(f"{ev[0]}: {ev[1]}")
+        except Exception:
             break
 
     header = "--- Secure Pipe Communication ---"
     footer = "--- Secure Pipe Done ---"
-    return "\n".join([header] + logs + [footer])
+    return "\n".join([header] + logs + [footer]), []
