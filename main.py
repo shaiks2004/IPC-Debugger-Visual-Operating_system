@@ -1,4 +1,3 @@
-#all modulesakjsdnias
 import tkinter as tk
 from gui.visualizer import IPCVisualizer
 

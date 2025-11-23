@@ -1,4 +1,3 @@
-#timing for process how the sate is goging to ehel
 import os
 import time
 

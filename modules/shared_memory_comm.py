@@ -1,5 +1,4 @@
 # Use Manager dict to simulate shared memory. Store encrypted bytes only.
-#lrneind
 from multiprocessing import Process, Manager, Queue
 from .secure_utils import SecureChannel
 
