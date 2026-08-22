@@ -1,83 +1,131 @@
+from __future__ import annotations
 
-# Simple secure pipe demo where sender sends (ciphertext, hmac)
-#here the code wil start commucnaing in ppoes
-
+import os
+import time
 from multiprocessing import Process, Pipe, Queue
+
+from .event_model import ProtocolEvent, now_ts
+from .scenario import IPCScenario
 from .secure_utils import SecureChannel, compute_hmac, verify_hmac
 
-def _sender_pipe(conn, key: bytes, log_q: Queue):
-    # note: small, intentionally straightforward sender
+
+def _event(channel: str, action: str, sender_pid=None, receiver_pid=None, payload=b"", hmac_ok=None, replayed=False, dropped=False, note=""):
+    return ProtocolEvent(
+        timestamp=now_ts(),
+        channel=channel,
+        action=action,
+        sender_pid=sender_pid,
+        receiver_pid=receiver_pid,
+        payload_size=len(payload) if payload else 0,
+        hmac_ok=hmac_ok,
+        replayed=replayed,
+        dropped=dropped,
+        note=note,
+    ).to_dict()
+
+
+def _sender_pipe(conn, key: bytes, log_q: Queue, scenario: IPCScenario):
     sc = SecureChannel(key)
-    plain = "Hello Securely through Pipe"
-    enc = sc.encrypt(plain)
-    tag = compute_hmac(key, enc)
-    # send ciphertext + tag together
-    conn.send((enc, tag))
-    log_q.put(("sender_plain", plain))
-    log_q.put(("sender_enc", repr(enc)))
-    log_q.put(("sender_hmac", repr(tag)))
+    pid = os.getpid()
+    payload = ("P" * max(1, scenario.message_size))[: scenario.message_size]
+    for idx in range(max(1, scenario.message_count)):
+        plain = f"msg-{idx}:{payload}"
+        enc = sc.encrypt(plain)
+        tag = compute_hmac(key, enc)
+
+        if scenario.drop_packet and idx == 0:
+            log_q.put(_event("pipe", "drop_packet", sender_pid=pid, payload=enc, dropped=True, note="Dropped by attack toggle"))
+            continue
+
+        if scenario.tamper_ciphertext and idx == 0:
+            enc = enc[:-1] + bytes([enc[-1] ^ 0x01])
+            log_q.put(_event("pipe", "tamper_ciphertext", sender_pid=pid, payload=enc, note="Ciphertext byte flipped"))
+
+        conn.send((enc, tag))
+        log_q.put(_event("pipe", "send", sender_pid=pid, payload=enc, note="Ciphertext+HMAC sent"))
+
+        if scenario.replay_attack and idx == 0:
+            conn.send((enc, tag))
+            log_q.put(_event("pipe", "replay", sender_pid=pid, payload=enc, replayed=True, note="Replayed previous packet"))
+
+        time.sleep(max(scenario.interval_ms, 0) / 1000)
+
+    conn.send(None)
     conn.close()
-    log_q.put(("sender_done", None))
 
-def _receiver_pipe(conn, key: bytes, log_q: Queue):
-    sc = SecureChannel(key)
-    try:
-        item = conn.recv()
-    except EOFError:
-        log_q.put(("receiver_error", "no data"))
-        conn.close()
-        return
 
-    if not item or not isinstance(item, tuple) or len(item) != 2:
-        log_q.put(("receiver_invalid_format", repr(item)))
-        conn.close()
-        return
+def _receiver_pipe(conn, key: bytes, log_q: Queue, scenario: IPCScenario):
+    receiver_key = SecureChannel().key if scenario.key_mismatch else key
+    sc = SecureChannel(receiver_key)
+    pid = os.getpid()
+    seen = set()
 
-    enc, tag = item
-    log_q.put(("receiver_received_enc", repr(enc)))
-    ok = verify_hmac(key, enc, tag)
-    log_q.put(("receiver_hmac_ok", str(ok)))
-    if not ok:
-        log_q.put(("receiver_auth_failed", None))
-        conn.close()
-        return
+    while True:
+        try:
+            item = conn.recv()
+        except EOFError:
+            log_q.put(_event("pipe", "recv_eof", receiver_pid=pid, note="EOF reached"))
+            break
 
-    try:
-        dec = sc.decrypt(enc)
-        log_q.put(("receiver_decrypted", dec))
-    except Exception as e:
-        log_q.put(("receiver_decrypt_error", str(e)))
+        if item is None:
+            break
+
+        if not isinstance(item, tuple) or len(item) != 2:
+            log_q.put(_event("pipe", "recv_invalid_format", receiver_pid=pid, note=repr(item)))
+            continue
+
+        enc, tag = item
+        fingerprint = enc[:24]
+        replayed = fingerprint in seen
+        seen.add(fingerprint)
+
+        ok = verify_hmac(key, enc, tag)
+        log_q.put(_event("pipe", "recv", receiver_pid=pid, payload=enc, hmac_ok=ok, replayed=replayed))
+
+        if not ok:
+            log_q.put(_event("pipe", "auth_failed", receiver_pid=pid, payload=enc, hmac_ok=False, note="HMAC verification failed"))
+            continue
+
+        try:
+            _ = sc.decrypt(enc)
+            log_q.put(_event("pipe", "decrypt_ok", receiver_pid=pid, payload=enc, note="Decryption successful"))
+        except Exception as e:
+            log_q.put(_event("pipe", "decrypt_error", receiver_pid=pid, payload=enc, note=str(e)))
+
     conn.close()
-    log_q.put(("receiver_done", None))
 
-def secure_pipe_example(key: bytes = None):
-    """
-    Run demo and return (log_text, events_list).
-    events_list currently empty but kept for animation compatibility.
-    """
+
+def secure_pipe_example(key: bytes = None, scenario: IPCScenario | None = None):
+    scenario = scenario or IPCScenario()
     parent_conn, child_conn = Pipe()
     log_q = Queue()
 
     sc = SecureChannel(key)
     key_used = sc.key
 
-    p1 = Process(target=_sender_pipe, args=(parent_conn, key_used, log_q))
-    p2 = Process(target=_receiver_pipe, args=(child_conn, key_used, log_q))
+    p_sender = Process(target=_sender_pipe, args=(parent_conn, key_used, log_q, scenario))
+    p_receiver = Process(target=_receiver_pipe, args=(child_conn, key_used, log_q, scenario))
 
-    p1.start()
-    p2.start()
+    if scenario.race_condition:
+        p_receiver.start()
+        time.sleep(0.03)
+        p_sender.start()
+    else:
+        p_sender.start()
+        p_receiver.start()
 
-    p1.join()
-    p2.join()
+    p_sender.join()
+    p_receiver.join()
 
-    logs = []
+    events = []
     while not log_q.empty():
         try:
-            ev = log_q.get_nowait()
-            logs.append(f"{ev[0]}: {ev[1]}")
+            events.append(log_q.get_nowait())
         except Exception:
             break
 
-    header = "--- Secure Pipe Communication ---"
-    footer = "--- Secure Pipe Done ---"
-    return "\n".join([header] + logs + [footer]), []
+    logs = ["--- Secure Pipe Communication ---"]
+    for ev in events:
+        logs.append(f"{ev['action']}: {ev.get('note', '')} hmac_ok={ev.get('hmac_ok')}")
+    logs.append("--- Secure Pipe Done ---")
+    return "\n".join(logs), events
