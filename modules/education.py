@@ -1,7 +1,8 @@
 LESSONS = {
-    "hmac_failure": "If ciphertext is altered, integrity verification fails and decryption is blocked.",
-    "shared_memory_leak": "Shared memory exposes plaintext risk unless data is encrypted before writing.",
-    "replay_attack": "Replay attacks resend old valid ciphertext; nonce or sequence validation is required.",
-    "key_mismatch": "If sender and receiver keys differ, decryption fails and authenticity cannot be established.",
-    "race_condition": "Race conditions can make consumers read too early; synchronization avoids flaky behavior.",
+    "hmac_failure": "Goal: observe integrity enforcement. Tampered ciphertext should trigger auth failure before decryption.",
+    "shared_memory_leak": "Goal: reason about memory exposure. Shared memory can leak sensitive data unless payloads are encrypted before write.",
+    "replay_attack": "Goal: detect replay behavior. Replayed ciphertext can look valid unless sequence/nonce checks are enforced.",
+    "key_mismatch": "Goal: diagnose key drift. Sender/receiver key mismatch causes decrypt failure even if transport succeeds.",
+    "race_condition": "Goal: study timing hazards. Unsynchronized startup can cause flaky reads and inconsistent IPC behavior.",
+    "drop_packet": "Goal: assess availability impact. Dropped packets reduce delivery completeness and can mask downstream faults.",
 }
